@@ -1,67 +1,29 @@
 var EventEmitter = require('events').EventEmitter
 var gzipMaybe = require('http-gzip-maybe')
-var gzipSize = require('gzip-size')
 var assert = require('assert')
 var path = require('path')
 var pump = require('pump')
 var send = require('send')
 
 var Router = require('./lib/regex-router')
-var ui = require('./lib/ui')
 var bankai = require('./')
-
-var files = [
-  'assets',
-  'documents',
-  'scripts',
-  'manifest',
-  'styles',
-  'service-worker'
-]
 
 module.exports = start
 
 function start (entry, opts) {
   opts = opts || {}
 
-  assert.equal(typeof entry, 'string', 'bankai/http: entry should be type string')
-  assert.equal(typeof opts, 'object', 'bankai/http: opts should be type object')
+  assert.strictEqual(typeof entry, 'string', 'bankai/http: entry should be type string')
+  assert.strictEqual(typeof opts, 'object', 'bankai/http: opts should be type object')
 
-  var quiet = !!opts.quiet
   opts = Object.assign({ reload: true }, opts)
   var compiler = bankai(entry, opts)
   var router = new Router()
   var emitter = new EventEmitter()
   var id = 0
   var state = {
-    count: compiler.metadata.count,
-    files: {},
-    sse: 0,
-    size: 0
+    sse: 0
   }
-
-  files.forEach(function (filename) {
-    state.files[filename] = {
-      name: filename,
-      progress: 0,
-      timestamp: '        ',
-      size: 0,
-      status: 'pending',
-      done: false
-    }
-  })
-
-  if (!quiet) var render = ui(state)
-  compiler.on('error', function (topic, sub, err) {
-    if (err.pretty) state.error = err.pretty
-    else state.error = `${topic}:${sub} ${err.message}\n${err.stack}`
-    if (!quiet) render()
-  })
-
-  compiler.on('progress', function () {
-    state.error = null
-    if (!quiet) render()
-  })
 
   compiler.on('ssr', function (result) {
     state.ssr = result
@@ -70,32 +32,16 @@ function start (entry, opts) {
   compiler.on('change', function (nodeName, edgeName, nodeState) {
     var node = nodeState[nodeName][edgeName]
     var name = nodeName + ':' + edgeName
-    var data = {
-      name: nodeName,
-      progress: 100,
-      timestamp: time(),
-      size: 0,
-      status: 'done',
-      done: true
-    }
-    state.files[nodeName] = data
-
     if (name === 'documents:index.html') emitter.emit('documents:index.html', node)
     if (name === 'styles:bundle') emitter.emit('styles:bundle', node)
-
-    // Only calculate the gzip size if there's a buffer. Apparently zipping
-    // an empty file means it'll pop out with a 20B base size.
-    if (node.buffer.length) {
-      gzipSize(node.buffer, function (err, size) {
-        if (err) data.size = node.buffer.length
-        else data.size = size
-        if (!quiet) render()
-      })
-    }
-    if (!quiet) render()
   })
 
-  router.route(/^\/manifest.json$/, function (req, res, params) {
+  router.route(/^\/(favicon\.)(ico|png|gif)$/, function (req, res, params) {
+    var filename = params[1] + params[2]
+    pump(send(req, filename), res)
+  })
+
+  router.route(/^\/manifest\.json$/, function (req, res, params) {
     compiler.manifest(function (err, node) {
       if (err) {
         res.statusCode = 404
@@ -117,9 +63,9 @@ function start (entry, opts) {
     })
   })
 
-  router.route(/^\/assets\/([^?]*)(\?.*)?$/, function (req, res, params) {
-    var prefix = 'assets' // TODO: also accept 'content'
-    var name = prefix + '/' + params[1]
+  router.route(/^\/(assets|content|public)\/([^?]*)(\?.*)?$/, function (req, res, params) {
+    var prefix = params[1] // asset dir
+    var name = prefix + '/' + params[2]
     compiler.assets(name, function (err, filename) {
       if (err) {
         res.statusCode = 404
@@ -181,7 +127,7 @@ function start (entry, opts) {
     emitter.on('documents:index.html', reloadScript)
     emitter.on('styles:bundle', reloadStyle)
     state.sse += 1
-    if (!quiet) render()
+    compiler.emit('sse-connect')
 
     res.writeHead(200, {
       'Content-Type': 'text/event-stream',
@@ -207,7 +153,7 @@ function start (entry, opts) {
         emitter.removeListener('styles:bundle', reloadStyle)
         connected = false
         state.sse -= 1
-        if (!quiet) render()
+        compiler.emit('sse-disconnect')
       }
     }
 
@@ -261,6 +207,8 @@ function start (entry, opts) {
 
   // TODO: move all UI code out of this file
   handler.state = state
+  // Expose compiler so we can use it in `bankai start`
+  handler.compiler = compiler
   return handler
 
   // Return a handler to listen.
@@ -273,17 +221,4 @@ function gzip (buffer, req, res) {
   var zipper = gzipMaybe(req, res)
   pump(zipper, res)
   zipper.end(buffer)
-}
-
-function time () {
-  var date = new Date()
-  var hours = numPad(date.getHours())
-  var minutes = numPad(date.getMinutes())
-  var seconds = numPad(date.getSeconds())
-  return `${hours}:${minutes}:${seconds}`
-}
-
-function numPad (num) {
-  if (num < 10) num = '0' + num
-  return num
 }

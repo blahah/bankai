@@ -136,34 +136,39 @@ care how we do this: it's lots of glue code, and not necessarily pretty. But it
 can be useful to know which optimizations we apply. This is a list:
 
 ### JavaScript
-- __bundle-collapser:__ Remove all pathnames from inside the bundle, and
-  replace them with IDs. This not only makes bundles smaller, it prevents
-  details from your local dev setup leaking.
-- __common-shakeify:__ Remove unused JavaScript code from the bundle. Best
-  known as _dead code elimination_ or _tree shaking_.
-- __unassertify:__ Remove all `require('assert')` statements from the code.
-  Only applied for production builds.
-- __uglifyify:__ Minify the bundle.
-- __yo-yoify:__ Optimize `choo` HTML code so it run significantly faster in the
+- __[nanohtml][]:__ Optimize `choo` HTML code so it runs significantly faster in the
   browser.
-- __glslify:__ Adds a module system to GLSL shaders.
-- __envify:__ Allow environment variables to be used in the bundle. Especially
-  useful in combination with minification, which removes unused code paths.
-- __brfs:__ Statically inline calls to `fs.readFile()`. Useful to ship assets
+- __[glslify][]:__ Adds a module system to GLSL shaders.
+- __[brfs][]:__ Statically inline calls to `fs.readFile()`. Useful to ship assets
   in the browser.
-- __split-require:__ Lazy load parts of your application using the
+- __[envify][]:__ Allow environment variables to be used in the bundle. Especially
+  useful in combination with minification, which removes unused code paths.
+- __[split-require][]:__ Lazy load parts of your application using the
   [`require('split-require')`][split-require] function.
-- __babelify:__ Bring the latest browser features to _all_ browsers. See
+- __[babelify][]:__ Bring the latest browser features to _all_ browsers. See
   [our babel section](#babel) for more details.
 
+And bankai uses [tinyify][], which adds the following optimizations:
+
+- __[browser-pack-flat][]:__ Remove function wrappers from the bundle, making
+  the result faster to run and easier to minify.
+- __[bundle-collapser][]:__ Remove all pathnames from inside the bundle, and
+  replace them with IDs. This not only makes bundles smaller, it prevents
+  details from your local dev setup leaking.
+- __[common-shakeify][]:__ Remove unused JavaScript code from the bundle. Best
+  known as _dead code elimination_ or _tree shaking_.
+- __[unassertify][]:__ Remove all `require('assert')` statements from the code.
+  Only applied for production builds.
+- __[uglifyify][]:__ Minify the bundle.
+
 ### CSS
-- __sheetify:__ extract all inline CSS from JavaScript, and include it in
+- __[sheetify][]:__ extract all inline CSS from JavaScript, and include it in
   `bundle.js`.
-- __purgeCSS:__ removes unused CSS from the project.
-- __cleanCSS:__ minify the bundle.
+- __[purifyCSS][purify-css]:__ removes unused CSS from the project.
+- __[cleanCSS][clean-css]:__ minify the bundle.
 
 ### HTML
-- __inline-critical-css:__ extract all crititical CSS for a page into the
+- __[inline-critical-css][]:__ extract all crititical CSS for a page into the
   `<head>` of the document. This means that every page will be able to render
   after the first roundtrip, which makes for super snappy pages.
 - __async load scripts:__ loads scripts in the background using the
@@ -216,6 +221,111 @@ JavaScript, no extra configuration is needed.
 }
 ```
 
+
+### Custom HTML
+By default, Bankai starts with an empty HTML document, injecting the tags
+mentioned [above](#html). You can also create a custom template as `index.html`,
+and Bankai will inject tags into it instead.
+
+If you export your Choo app instance after doing `.mount()`, Bankai respects the
+mount location during server side rendering:
+
+```js
+// app.js
+...
+module.exports = app.mount('#app')
+```
+
+```html
+<!-- index.html -->
+...
+<body>
+  <div id="app"></div>
+  <div id="footer">© 2018</div>
+</body>
+...
+```
+
+### Injecting headers - favicon.ico, CDNs, manifests etc...
+
+You might be looking to use some of the fantastic third party libraries or tools out there. Take the [font-awesome](https://fontawesome.com/) library for example, but there are plenty of others. To do so, you typically need to include additional css or js libraries in your ```<head>```. And you can do this by setting up your documentify transform.
+
+In this example, you will need to add a "documentify" transform which specifies a js file used, but you will also need a couple of extra npm libraries which you can install with:
+
+```bash
+npm i hstream dedent
+```
+
+Now in ```package.json```, add the following transform:
+
+```json
+"documentify": {
+    "transform": [
+      [
+        "./lib/document.js",
+        {
+          "order": "end"
+        }
+      ]
+    ]
+  },
+```
+
+In this example, we are storing the transform in a folder called ```lib```, which you will need to create, and create a ```document.js``` file in it. Edit the file called ```document.js``` and put the following transform code in it:
+
+```js
+var dedent = require('dedent')
+var hyperstream = require('hstream')
+
+module.exports = document
+
+function document () {
+  return hyperstream({
+    'meta[name="viewport"]': {
+      content: 'width=device-width, initial-scale=1, viewport-fit=cover'
+    },
+    head: {
+      _prependHtml: dedent`
+      <link rel="manifest" href="manifest.json">
+      <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/4.7.0/css/font-awesome.min.css">
+      `,
+      _appendHtml: dedent`
+        <link rel="shortcut icon" href="/favicon.ico">
+      `
+    }
+  })
+}
+```
+
+This example now enables Bankai to generate an ```index.html``` file which has a link to the font-awesome css cdn, a ```manifest.json``` file, and a ```favicon.ico``` file ready for deployment.
+
+### Service Workers
+Bankai comes with support for service workers. You can place a service worker
+entry point in a file called `sw.js` or `service-worker.js`. Bankai will output
+a browserify bundle by the same name.
+
+You can easily register service workers using
+[choo-service-worker](https://github.com/choojs/choo-service-worker):
+```js
+app.use(require('choo-service-worker')())
+```
+
+choo-service-worker defaults to `/sw.js` for the service worker file name. If
+you named your service worker `service-worker.js` instead, do:
+```js
+app.use(require('choo-service-worker')('/service-worker.js'))
+```
+
+Service workers have access to some environment variables:
+ * __process.env.STYLE_LIST:__ An array of URLs to stylesheet files.
+ * __process.env.SCRIPT_LIST:__ An array of URLs to script files.
+ * __process.env.ASSET_LIST:__ An array of URLs to assets.
+ * __process.env.DOCUMENT_LIST:__ An array of URLs to server-rendered routes.
+ * __process.env.MANIFEST_LIST:__ An array containing the URL to the manifest
+   file.
+ * __process.env.FILE_LIST:__ An array of URLs to assets and routes. This can
+   be used to add all your app's files to a service worker cache.
+
 ## HTTP
 Bankai can be hooked up directly to an HTTP server, which is useful when
 working on full stack code.
@@ -224,7 +334,7 @@ var bankai = require('bankai/http')
 var http = require('http')
 var path = require('path')
 
-var compiler = bankai(path.join(__dirname, 'example'))
+var compiler = bankai(path.join(__dirname, 'client.js'))
 var server = http.createServer(function (req, res) {
   compiler(req, res, function () {
     res.statusCode = 404
@@ -247,10 +357,10 @@ JavaScript in, and outputs JavaScript based for the platforms you've decided to
 target. In Bankai we target the last 2 versions of FireFox, Chrome and Edge,
 and every other browser that's used by more than 1% of people on earth. This
 includes IE11. And if you have different opinions on which browsers to use,
-Bankai respects `.babelrc` files.
+Bankai respects `.babelrc` and [`.browserslistrc`](https://github.com/ai/browserslist) files.
 
 Some newer JavaScript features require loading an extra library; `async/await`
-being the clearest example. To enable this features, the `babel-polyfill`
+being the clearest example. To enable such features, the `babel-polyfill`
 library needs to be included in your application's root (e.g. `index.js`).
 
 ```js
@@ -262,7 +372,7 @@ size overhead. Once Babel includes only the language features you're using,
 we'll work to include `babel-polyfill` by default.
 
 ## Events
-### `compiler.on('error', callback(error))`
+### `compiler.on('error', callback(nodeName, edgeName, error))`
 Whenever an internal error occurs.
 
 ### `compiler.on('change', callback(nodeName, edgeName, state))`
@@ -270,29 +380,35 @@ Whenever a change in the internal graph occurs.
 
 ## API
 ### `compiler = bankai(entry, [opts])`
-Create a new bankai instance. Takes either an entry file location, or an array
-of files.
+Create a new bankai instance. Takes a path to a JavaScript file as the first
+argument. The following options are available:
 
-### `compiler.documents(routename, [opts], done(err, buffer))`
+- __opts.quiet:__ Defaults to `false`. Don't output any data to `stdout`. Useful
+  if you have your own logging system.
+- __opts.watch:__ Defaults to `true`. Watch for changes in the source files and
+  rebuild. Set to `false` to get optimized bundles.
+- __babelifyDeps:__ Defaults to true. Transform dependencies with babelify.
+
+### `compiler.documents(routename, [opts], done(err, { buffer, hash }))`
 Output an HTML bundle for a route. Routes are determined based on the project's
 router. Pass `'/'` to get the default route.
 
 - __opts.state:__ Will be passed the render function for the route, and inlined
   in the `<head>` of the body as `window.initialState`.
 
-### `compiler.scripts(filename, done(err, buffer))`
+### `compiler.scripts(filename, done(err, { buffer, hash }))`
 Pass in a filename and output a JS bundle.
 
-### `compiler.assets(assetName, done(err, buffer))`
+### `compiler.assets(assetName, done(err, { buffer, hash }))`
 Output any other file besides JS, CSS or HTML.
 
-### `compiler.styles(name, done(err, buffer))`
+### `compiler.styles(name, done(err, { buffer, hash }))`
 Output a CSS bundle.
 
-### `compiler.manifest(done(err, buffer))`
+### `compiler.manifest(done(err, { buffer, hash }))`
 Output a `manifest.json`.
 
-### `compiler.serviceWorker(done(err, buffer))`
+### `compiler.serviceWorker(done(err, { buffer, hash }))`
 Output a service worker.
 
 ### `compiler.close()`
@@ -301,10 +417,24 @@ Close all file watchers.
 ## License
 Apache License 2.0
 
-[sheetify]: https://github.com/stackcss/sheetify
+[babelify]: https://github.com/babel/babelify
+[brfs]: https://github.com/browserify/brfs
+[browser-pack-flat]: https://github.com/goto-bus-stop/browser-pack-flat
+[browserify]: https://github.com/browserify/browserify
+[bundle-collapser]: https://github.com/substack/bundle-collapser
+[clean-css]: https://github.com/jakubpawlowicz/clean-css
+[common-shakeify]: https://github.com/browserify/common-shakeify
 [documentify]: https://github.com/stackhtml/documentify
-[browserify]: https://github.com/substack/node-browserify
+[envify]: https://github.com/hughsk/envify
+[glslify]: https://github.com/glslify/glslify
+[inline-critical-css]: https://github.com/stackcss/inline-critical-css
+[nanohtml]: https://github.com/choojs/nanohtml
+[purify-css]: https://github.com/purifycss/purifycss
+[sheetify]: https://github.com/stackcss/sheetify
 [split-require]: https://github.com/goto-bus-stop/split-require
+[tinyify]: https://github.com/browserify/tinyify
+[uglifyify]: https://github.com/hughsk/uglifyify
+[unassertify]: https://github.com/unassert-js/unassertify
 
 [0]: https://img.shields.io/badge/stability-experimental-orange.svg?style=flat-square
 [1]: https://nodejs.org/api/documentation.html#documentation_stability_index
